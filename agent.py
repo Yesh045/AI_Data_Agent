@@ -3,6 +3,9 @@ import google.generativeai as genai
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, inspect
+import matplotlib.pyplot as plt
+import subprocess
+import sys
 
 # --- SETUP ---
 # Load environment variables from .env file
@@ -33,7 +36,6 @@ def get_db_schema(engine):
 def execute_query(engine, query):
     """Executes the SQL query and returns the result as a pandas DataFrame."""
     try:
-        # The 'with' statement ensures the connection is properly closed.
         with engine.connect() as connection:
             df = pd.read_sql_query(query, connection)
             return df
@@ -50,41 +52,92 @@ def generate_sql(prompt: str, schema: str, history: list) -> str:
     """
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # Format the history for the prompt
     formatted_history = "\n".join([f"User: {h['user']}\nAI SQL: {h['sql']}" for h in history])
 
     full_prompt = f"""
     You are an expert SQLite data analyst. Your task is to generate a SQLite query based on a user's question about a database.
     You have access to the conversation history to understand context for follow-up questions.
-
     **Rules:**
-    1.  Only output the SQL query. Do not include any other text, explanations, or markdown formatting.
-    2.  The query should be a single line of text.
-    3.  Your query must be compatible with SQLite syntax.
-    4.  If the user's question is a follow-up, use the history to correctly interpret it. For example, if the previous query was about 'Electronics' and the user now says "what about 'Books'?", you should generate a similar query for the 'Books' category.
+    1. Only output the SQL query. Do not include any other text, explanations, or markdown formatting.
+    2. The query should be a single line of text.
+    3. Your query must be compatible with SQLite syntax.
+    4. If the user's question is a follow-up, use the history to correctly interpret it.
 
     **Database Schema:**
     ```
     {schema}
     ```
-
     **Conversation History:**
     {formatted_history}
-
     **User's Current Question:**
     "{prompt}"
-
     **Generated SQLite Query:**
     """
     
     try:
         response = model.generate_content(full_prompt)
-        # Clean up the response to ensure it's just the SQL query
         sql_query = response.text.strip().replace("```sql", "").replace("```", "")
         return sql_query
     except Exception as e:
         print(f"An error occurred with the Gemini API: {e}")
         return None
+
+def generate_plot(prompt: str, df: pd.DataFrame):
+    """
+    Asks the user if they want a plot and generates/displays it if they say yes.
+    """
+    plot_prompt = input("Do you want to generate a plot for these results? (y/n): ")
+    if plot_prompt.lower() != 'y':
+        return
+        
+    # Give the AI the context and the data to generate plotting code
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Get the first 5 rows of the dataframe to show the AI the data structure
+    df_head = df.head().to_string()
+
+    full_prompt = f"""
+    You are a data visualization expert. Your task is to generate Python code to plot data from a pandas DataFrame named `df`.
+    The user wants to visualize the answer to their question: "{prompt}"
+
+    **Rules:**
+    1.  Only output Python code for the plot. Do not include any other text, explanations, or markdown.
+    2.  Use the `matplotlib.pyplot` library. The DataFrame is already loaded as `df`.
+    3.  Make the plot clear and informative (e.g., add titles and labels).
+    4.  The code must save the plot to a file named 'plot.png'.
+    5.  Do not include `import pandas as pd` or code to load the data; assume `df` is already available.
+
+    **Data Sample (from df.head()):**
+    ```
+    {df_head}
+    ```
+
+    **Python Code for Visualization:**
+    """
+    
+    print("\nGenerating visualization code...")
+    try:
+        response = model.generate_content(full_prompt)
+        plot_code = response.text.strip().replace("```python", "").replace("```", "")
+        
+        print("Executing visualization code...")
+        # Execute the generated code. `exec` is powerful and should be used with caution.
+        # Here, we trust the AI's output in our controlled environment.
+        # We pass {'df': df, 'plt': plt} to give the code access to the DataFrame and matplotlib.
+        exec(plot_code, {'df': df, 'plt': plt})
+
+        print("Plot saved to plot.png. Opening image...")
+        
+        # Open the generated plot image
+        if sys.platform == "win32":
+            os.startfile('plot.png')
+        else:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.call([opener, 'plot.png'])
+
+    except Exception as e:
+        print(f"An error occurred during visualization: {e}")
+
 
 # --- MAIN EXECUTION ---
 
@@ -114,7 +167,6 @@ if __name__ == "__main__":
                 print("\n--- Generated SQL Query ---")
                 print(generated_query)
                 
-                # Add to history BEFORE executing, so context is available for next turn
                 chat_history.append({"user": user_prompt, "sql": generated_query})
 
                 print("\n--- Query Results ---")
@@ -122,9 +174,14 @@ if __name__ == "__main__":
                 if results_df is not None:
                     if not results_df.empty:
                         print(results_df.to_string())
+                        # NEW: Ask the user if they want a plot
+                        generate_plot(user_prompt, results_df)
                     else:
                         print("The query executed successfully but returned no results.")
                 print("-" * 30)
 
             else:
                 print("Could not generate a query for your question.")
+
+
+
