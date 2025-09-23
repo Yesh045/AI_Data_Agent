@@ -43,6 +43,20 @@ def execute_query(engine, query):
         print(f"\nAn error occurred while executing the query:\n{e}")
         return None
 
+def save_results_to_csv(df: pd.DataFrame):
+    """Asks the user if they want to save the results and saves to CSV if they say yes."""
+    save_prompt = input("Do you want to save these results to a CSV file? (y/n): ")
+    if save_prompt.lower() != 'y':
+        return
+
+    filename = "query_results.csv"
+    try:
+        df.to_csv(filename, index=False)
+        print(f"\nResults successfully saved to '{filename}' in your project folder.")
+    except Exception as e:
+        print(f"\nAn error occurred while saving the file: {e}")
+
+
 # --- AI LOGIC ---
 
 def generate_sql(prompt: str, schema: str, history: list) -> str:
@@ -90,12 +104,10 @@ def generate_plot(prompt: str, df: pd.DataFrame):
     if plot_prompt.lower() != 'y':
         return
         
-    # Give the AI the context and the data to generate plotting code
     model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # Get the first 5 rows of the dataframe to show the AI the data structure
     df_head = df.head().to_string()
 
+    # This is the corrected string with the closing """.
     full_prompt = f"""
     You are a data visualization expert. Your task is to generate Python code to plot data from a pandas DataFrame named `df`.
     The user wants to visualize the answer to their question: "{prompt}"
@@ -121,14 +133,10 @@ def generate_plot(prompt: str, df: pd.DataFrame):
         plot_code = response.text.strip().replace("```python", "").replace("```", "")
         
         print("Executing visualization code...")
-        # Execute the generated code. `exec` is powerful and should be used with caution.
-        # Here, we trust the AI's output in our controlled environment.
-        # We pass {'df': df, 'plt': plt} to give the code access to the DataFrame and matplotlib.
         exec(plot_code, {'df': df, 'plt': plt})
 
         print("Plot saved to plot.png. Opening image...")
         
-        # Open the generated plot image
         if sys.platform == "win32":
             os.startfile('plot.png')
         else:
@@ -174,7 +182,7 @@ if __name__ == "__main__":
                 if results_df is not None:
                     if not results_df.empty:
                         print(results_df.to_string())
-                        # NEW: Ask the user if they want a plot
+                        save_results_to_csv(results_df)
                         generate_plot(user_prompt, results_df)
                     else:
                         print("The query executed successfully but returned no results.")
@@ -184,4 +192,5 @@ if __name__ == "__main__":
                 print("Could not generate a query for your question.")
 
 
+    
 
