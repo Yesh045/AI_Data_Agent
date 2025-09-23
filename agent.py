@@ -38,33 +38,40 @@ def execute_query(engine, query):
             df = pd.read_sql_query(query, connection)
             return df
     except Exception as e:
-        print(f"An error occurred while executing the query: {e}")
+        print(f"\nAn error occurred while executing the query:\n{e}")
         return None
 
 # --- AI LOGIC ---
 
-def generate_sql(prompt: str, schema: str) -> str:
+def generate_sql(prompt: str, schema: str, history: list) -> str:
     """
-    Uses the Gemini AI to convert a natural language prompt into a SQL query.
+    Uses the Gemini AI to convert a natural language prompt into a SQL query,
+    considering the conversation history.
     """
-    # This is our "meta-prompt" or the master instruction for the AI.
-    # It tells the AI its role, the rules, and provides the necessary context.
     model = genai.GenerativeModel('gemini-1.5-flash')
     
+    # Format the history for the prompt
+    formatted_history = "\n".join([f"User: {h['user']}\nAI SQL: {h['sql']}" for h in history])
+
     full_prompt = f"""
     You are an expert SQLite data analyst. Your task is to generate a SQLite query based on a user's question about a database.
+    You have access to the conversation history to understand context for follow-up questions.
 
     **Rules:**
     1.  Only output the SQL query. Do not include any other text, explanations, or markdown formatting.
     2.  The query should be a single line of text.
     3.  Your query must be compatible with SQLite syntax.
+    4.  If the user's question is a follow-up, use the history to correctly interpret it. For example, if the previous query was about 'Electronics' and the user now says "what about 'Books'?", you should generate a similar query for the 'Books' category.
 
     **Database Schema:**
     ```
     {schema}
     ```
 
-    **User's Question:**
+    **Conversation History:**
+    {formatted_history}
+
+    **User's Current Question:**
     "{prompt}"
 
     **Generated SQLite Query:**
@@ -82,43 +89,42 @@ def generate_sql(prompt: str, schema: str) -> str:
 # --- MAIN EXECUTION ---
 
 if __name__ == "__main__":
-    # Path to your SQLite database
     db_path = 'sales.db'
-    
-    # Create the database engine using SQLAlchemy
-    # The 'sqlite:///' part tells SQLAlchemy it's a SQLite database
     engine = create_engine(f'sqlite:///{db_path}')
     
-    # 1. Get the database schema
     db_schema = get_db_schema(engine)
     print("--- Database Schema Detected ---")
     print(db_schema)
     print("-" * 30)
-    
-    # 2. Get the user's question
-    user_prompt = input("Ask a question about your data: ")
-    
-    if user_prompt:
-        # 3. Generate the SQL query
-        generated_query = generate_sql(user_prompt, db_schema)
+    print("Agent is ready. Ask a question about your data. Type 'exit' to quit.")
+
+    chat_history = []
+
+    while True:
+        user_prompt = input("\nYour question: ")
         
-        if generated_query:
-            print("\n--- Generated SQL Query ---")
-            print(generated_query)
-            print("-" * 30)
+        if user_prompt.lower() == 'exit':
+            print("Goodbye!")
+            break
+        
+        if user_prompt:
+            generated_query = generate_sql(user_prompt, db_schema, chat_history)
+            
+            if generated_query:
+                print("\n--- Generated SQL Query ---")
+                print(generated_query)
+                
+                # Add to history BEFORE executing, so context is available for next turn
+                chat_history.append({"user": user_prompt, "sql": generated_query})
 
-            # 4. Execute the query and display the results
-            print("\n--- Query Results ---")
-            results_df = execute_query(engine, generated_query)
-            if results_df is not None:
-                if not results_df.empty:
-                    # Using .to_string() ensures the full DataFrame is printed
-                    print(results_df.to_string())
-                else:
-                    print("The query executed successfully but returned no results.")
-            print("-" * 30)
+                print("\n--- Query Results ---")
+                results_df = execute_query(engine, generated_query)
+                if results_df is not None:
+                    if not results_df.empty:
+                        print(results_df.to_string())
+                    else:
+                        print("The query executed successfully but returned no results.")
+                print("-" * 30)
 
-        else:
-            print("Could not generate a query for your question.")
-
-
+            else:
+                print("Could not generate a query for your question.")
