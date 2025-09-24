@@ -1,30 +1,56 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Data Agent</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Data Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>AI Data Agent</h1>
-            <p>Your Natural Language to Data Insight Partner</p>
-        </header>
-        <div class="chat-window">
-            <div id="chat-box" class="chat-box">
-                <!-- Chat messages will be appended here -->
-                <div class="message bot-message">
-                    <p>Hello! I'm ready to answer questions about your database. How can I help you?</p>
-                </div>
-            </div>
-            <div class="input-area">
-                <input type="text" id="user-input" placeholder="e.g., Show me total sales by category...">
-                <button id="send-btn">Send</button>
-            </div>
+  <div class="layout">
+    
+    <aside class="sidebar">
+      <h2>📊 History</h2>
+      <ul id="history"></ul>
+    </aside>
+    
+    <main class="main">
+      <header>
+        <h1>AI Data Agent</h1>
+        <button id="theme-toggle">🌙</button>
+      </header>
+      
+      <div class="chat-window">
+        <div id="chat-box" class="chat-box">
+          <div class="message bot-message">
+            <p>👋 Hi! Ask me a question about your data, or try:<br>
+              <em>“Show sales trend by month”</em></p>
+          </div>
         </div>
-    </div>
-    <script src="/static/script.js"></script>
+        
+        <div class="input-area">
+          <input type="text" id="user-input" placeholder="Type your question...">
+          <button id="send-btn">➤</button>
+        </div>
+        
+        <div class="suggestions">
+          <button class="chip">Top 10 Products</button>
+          <button class="chip">Sales by Region</button>
+          <button class="chip">Monthly Trend</button>
+        </div>
+      </div>
+    </main>
+    
+    <aside class="insights">
+      <h2>🔎 Insights</h2>
+      <div id="insight-box">
+        <p>Your analysis and charts will appear here.</p>
+      </div>
+      <button id="download-chart-btn" class="download-btn" style="display: none;">Download Chart</button>
+    </aside>
+  </div>
+  
+  <script src="/static/script.js"></script>
 </body>
 </html>
