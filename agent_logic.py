@@ -11,6 +11,10 @@ api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
     raise ValueError("GOOGLE_API_KEY not found in .env file.")
 genai.configure(api_key=api_key)
+
+# --- MODEL REVERT ---
+# We are reverting to the 1.5 Flash model. It is highly capable and has
+# a more generous free tier, which will prevent the quota errors.
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- DATABASE INTERACTION ---

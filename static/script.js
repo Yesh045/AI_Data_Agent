@@ -2,16 +2,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
     const chatBox = document.getElementById('chat-box');
-    
-    // Get references to our dashboard panels
     const insightBox = document.getElementById('insight-box');
     const downloadBtn = document.getElementById('download-chart-btn');
-    const suggestionChips = document.querySelectorAll('.chip');
     
     let chartInstance = null;
 
-    const sendMessage = async (prompt) => {
-        if (!prompt || prompt.trim() === '') return;
+    const sendMessage = async () => {
+        const prompt = userInput.value.trim();
+        if (!prompt) return;
 
         appendChatMessage(prompt, 'user-message');
         userInput.value = '';
@@ -33,7 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Error:', error);
             const errorData = { analysis: { summary: 'Sorry, a technical error occurred. Please check the server console.' } };
             updateChat(errorData);
-            updateInsights(errorData);
         }
     };
     
@@ -46,43 +43,45 @@ document.addEventListener('DOMContentLoaded', () => {
         const loadingMessage = chatBox.querySelector('.loading');
         let chatHtml = '';
 
-        if (data.chat_response) {
-            chatHtml = `<p>${data.chat_response}</p>`;
-        } else if (data.analysis && data.analysis.summary) {
-            chatHtml = `<p>${data.analysis.summary}</p>`;
-        } else {
-            chatHtml = `<p>I've updated the insights panel with your results.</p>`;
+        if (data.analysis && data.analysis.summary) {
+            chatHtml += `<p>${data.analysis.summary}</p>`;
+        }
+        
+        // This correctly places the table in the chat message, fulfilling your request
+        if (data.results && data.results.length > 0) {
+            chatHtml += createTable(data.results);
         }
 
         if (loadingMessage) {
-            loadingMessage.innerHTML = chatHtml;
+            if (chatHtml.trim() === '') {
+                // If there's nothing to show, give a generic response
+                loadingMessage.innerHTML = "<p>I've processed your request. The results are in the insights panel.</p>";
+            } else {
+                loadingMessage.innerHTML = chatHtml;
+            }
             loadingMessage.classList.remove('loading');
-        } else {
-            appendChatMessage(chatHtml, 'bot-message');
         }
     };
 
     const updateInsights = (data) => {
-        // Always clear the panel and hide the button first for a fresh slate
         insightBox.innerHTML = '';
         downloadBtn.style.display = 'none';
 
-        if (data.sql) {
+        if (data.sql_query) {
             const details = document.createElement('details');
-            details.innerHTML = `<summary>Show SQL Query</summary><pre>${data.sql}</pre>`;
+            details.innerHTML = `<summary>Show SQL Query</summary><pre>${data.sql_query}</pre>`;
             insightBox.appendChild(details);
         }
 
+        // The chart is now the only other item in the insights panel
         if (data.analysis && data.analysis.chart_config) {
             const canvas = document.createElement('canvas');
             canvas.id = 'botChart';
             insightBox.appendChild(canvas);
             renderChart(data.analysis.chart_config, data.results);
-            downloadBtn.style.display = 'block'; // Show the download button only if a chart exists
-        } else if (data.results && data.results.length > 0) {
-            insightBox.innerHTML += createTable(data.results);
-        } else if (!data.sql && !data.chat_response) {
-             insightBox.innerHTML = '<p>No analysis to display. Ask a question!</p>';
+            downloadBtn.style.display = 'block';
+        } else if (!data.sql_query) {
+             insightBox.innerHTML = '<p>No analysis to display for this conversation.</p>';
         }
     };
 
@@ -106,14 +105,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadChart = () => {
         if (!chartInstance) return;
         const link = document.createElement('a');
-        link.href = chartInstance.toBase64Image();
+        link.href = chartInstance.toBase64Image('image/png', 1.0); // High quality
         link.download = 'ai_data_agent_chart.png';
         link.click();
     };
 
     const createTable = (data) => {
         const headers = Object.keys(data[0]);
-        let table = '<table><thead><tr>';
+        let table = '<div class="table-wrapper">'; // Wrapper for scrolling
+        table += '<table><thead><tr>';
         headers.forEach(h => table += `<th>${h}</th>`);
         table += '</tr></thead><tbody>';
         data.forEach(row => {
@@ -121,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
             headers.forEach(h => table += `<td>${row[h]}</td>`);
             table += '</tr>';
         });
-        table += '</tbody></table>';
+        table += '</tbody></table></div>';
         return table;
     };
 
@@ -129,28 +129,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${className}`;
         if (isLoading) { messageDiv.classList.add('loading'); }
-
-        if (className === 'bot-message') {
-            messageDiv.innerHTML = content;
-        } else {
-            const p = document.createElement('p');
-            p.textContent = content;
-            messageDiv.appendChild(p);
-        }
+        messageDiv.innerHTML = content;
         chatBox.appendChild(messageDiv);
         chatBox.scrollTop = chatBox.scrollHeight;
     };
 
-    sendBtn.addEventListener('click', () => sendMessage(userInput.value));
+    sendBtn.addEventListener('click', sendMessage);
     userInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage(userInput.value);
+        if (e.key === 'Enter') sendMessage();
     });
     downloadBtn.addEventListener('click', downloadChart);
-    suggestionChips.forEach(chip => {
-        chip.addEventListener('click', () => {
-            const prompt = chip.textContent;
-            userInput.value = prompt;
-            sendMessage(prompt);
-        });
-    });
 });
