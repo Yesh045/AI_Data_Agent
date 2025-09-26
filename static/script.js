@@ -47,15 +47,13 @@ document.addEventListener('DOMContentLoaded', () => {
             chatHtml += `<p>${data.analysis.summary}</p>`;
         }
         
-        // This correctly places the table in the chat message, fulfilling your request
         if (data.results && data.results.length > 0) {
             chatHtml += createTable(data.results);
         }
 
         if (loadingMessage) {
             if (chatHtml.trim() === '') {
-                // If there's nothing to show, give a generic response
-                loadingMessage.innerHTML = "<p>I've processed your request. The results are in the insights panel.</p>";
+                loadingMessage.innerHTML = "<p>I've processed your request. See the insights panel for details.</p>";
             } else {
                 loadingMessage.innerHTML = chatHtml;
             }
@@ -73,7 +71,6 @@ document.addEventListener('DOMContentLoaded', () => {
             insightBox.appendChild(details);
         }
 
-        // The chart is now the only other item in the insights panel
         if (data.analysis && data.analysis.chart_config) {
             const canvas = document.createElement('canvas');
             canvas.id = 'botChart';
@@ -85,34 +82,56 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // *** THIS IS THE NEW, SMARTER CHARTING LOGIC ***
     const renderChart = (config, data) => {
+        console.log("Attempting to render chart with this config:", config);
         const ctx = document.getElementById('botChart').getContext('2d');
         if (chartInstance) {
             chartInstance.destroy();
         }
 
-        config.data.datasets.forEach(dataset => {
-            const dataKey = dataset.data[0];
-            dataset.data = data.map(row => row[dataKey]);
-        });
-        
-        const labelKey = config.data.labels[0];
-        config.data.labels = data.map(row => row[labelKey]);
+        try {
+            // Robustly get the column names from the AI's blueprint
+            const labelKey = config.data.labels;
+            const dataKey = config.data.datasets[0].data;
 
-        chartInstance = new Chart(ctx, config);
+            if (!labelKey || !dataKey) {
+                throw new Error("AI blueprint is missing label or data key.");
+            }
+
+            // Map the actual data using the column names
+            const labels = data.map(row => row[labelKey]);
+            const chartData = data.map(row => row[dataKey]);
+
+            // Update the config with the real data
+            config.data.labels = labels;
+            config.data.datasets[0].data = chartData;
+
+            // Set a default color if the AI doesn't provide one
+            if (!config.data.datasets[0].backgroundColor) {
+                config.data.datasets[0].backgroundColor = 'rgba(0, 122, 255, 0.6)';
+            }
+
+            console.log("Final chart.js config:", config);
+            chartInstance = new Chart(ctx, config);
+
+        } catch (error) {
+            console.error("Failed to build chart from AI blueprint:", error);
+            insightBox.innerHTML += `<p style="color: red;">Error: I failed to plot the visualization correctly.</p>`;
+        }
     };
     
     const downloadChart = () => {
         if (!chartInstance) return;
         const link = document.createElement('a');
-        link.href = chartInstance.toBase64Image('image/png', 1.0); // High quality
+        link.href = chartInstance.toBase64Image('image/png', 1.0);
         link.download = 'ai_data_agent_chart.png';
         link.click();
     };
 
     const createTable = (data) => {
         const headers = Object.keys(data[0]);
-        let table = '<div class="table-wrapper">'; // Wrapper for scrolling
+        let table = '<div class="table-wrapper">';
         table += '<table><thead><tr>';
         headers.forEach(h => table += `<th>${h}</th>`);
         table += '</tr></thead><tbody>';

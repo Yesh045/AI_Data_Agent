@@ -4,6 +4,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import inspect
 import json
+import re
 
 # --- SETUP ---
 load_dotenv()
@@ -11,9 +12,11 @@ api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
     raise ValueError("GOOGLE_API_KEY not found in .env file.")
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- DATABASE INTERACTION ---
+# --- MODEL (Using the working name you discovered) ---
+model = genai.GenerativeModel('gemini-2.0-flash-lite')
+
+# --- DATABASE INTERACTION (No changes here) ---
 def get_db_schema(engine):
     inspector = inspect(engine)
     schema_info = []
@@ -32,48 +35,57 @@ def execute_query(engine, query):
         print(f"Query Execution Error: {e}")
         return None
 
-# --- AI LOGIC (STEP 1: Just get the SQL) ---
+# --- AI LOGIC (STEP 1: This function is already stable) ---
 def generate_sql(prompt: str, schema: str, history: list) -> str:
-    formatted_history = "\n".join([f"User: {h.get('user')}\nAI SQL: {h.get('sql', '')}" for h in history if h.get('sql')])
-    full_prompt = f"""You are an expert SQLite data analyst. Your first and only job is to generate a single, valid SQLite query to answer the user's question.
-    **Rules:**
-    - Only output the SQL query.
-    - Do not output any other text, explanations, or markdown.
+    full_prompt = f"""You are an expert SQLite data analyst. Your task is to generate a single, valid SQLite query to answer the user's question.
+    **CRITICAL RULE:** You MUST wrap your final query in a ```sql markdown block. For example:
+    ```sql
+    SELECT * FROM sales;
+    ```
+    Do not add any other conversational text or explanations outside of this block.
 
     **Database Schema:**
     {schema}
 
-    **Conversation History:**
-    {history}
-
     **User's Question:**
     "{prompt}"
-
-    **Generated SQLite Query:**"""
+    """
     try:
         response = model.generate_content(full_prompt)
-        return response.text.strip().replace("```sql", "").replace("```", "")
+        full_response_text = response.text
+        sql_match = re.search(r"```sql\n(.*?)\n```", full_response_text, re.DOTALL)
+        
+        if sql_match:
+            sql_query = sql_match.group(1).strip()
+            print(f"Successfully extracted SQL: {sql_query}")
+            return sql_query
+        else:
+            print(f"--- FAILED TO EXTRACT SQL ---")
+            print(f"AI Full Response: {full_response_text}")
+            return full_response_text.strip() # Fallback
+        
     except Exception as e:
         print(f"SQL Generation Error: {e}")
         return None
 
-# --- AI LOGIC (STEP 2: Analyze the actual results) ---
+# --- AI LOGIC (STEP 2: A More Precise Prompt for Charting) ---
 def analyze_data_for_insights(prompt: str, df: pd.DataFrame) -> str:
-    """
-    Analyzes a DataFrame and returns a JSON object with a summary and
-    an optional Chart.js configuration.
-    """
     df_head = df.head(5).to_string()
     
     full_prompt = f"""
     You are a principal data analyst. You have been given the results of a user's query. Your job is to analyze these results and provide a summary and a potential visualization.
-    Return a single JSON object with two keys:
+    Return a single, valid JSON object with two keys:
     1.  "summary" (string): A concise, one-sentence summary of the data's main finding.
     2.  "chart_config" (object or null): Generate a valid Chart.js configuration ONLY IF the data is appropriate for a chart. Otherwise, the value MUST be null.
 
     **CRITICAL RULES FOR CHARTING:**
     - A chart is appropriate ONLY IF the data contains at least one categorical (text) column AND at least one numerical column.
-    - Do NOT generate a chart if the query result is just a single number or a list of text items (like a list of table names).
+    - Do NOT generate a chart if the query result is just a single number or a list of text items.
+    
+    **Chart.js Blueprint Rules:**
+    - The "labels" key MUST point to a single string: the name of the column to be used for the x-axis labels.
+    - The "datasets" array's "data" key MUST point to a single string: the name of the column for the y-axis data.
+    - Example: "labels": "category", "data": "total_sales"
 
     **User's Original Request:** "{prompt}"
     **Data Sample (first 5 rows):**
@@ -85,9 +97,18 @@ def analyze_data_for_insights(prompt: str, df: pd.DataFrame) -> str:
     """
     try:
         response = model.generate_content(full_prompt)
-        json_response = response.text.strip().replace("```json", "").replace("```", "")
-        json.loads(json_response) # Validate
-        return json_response
+        # A more robust way to extract JSON
+        text_response = response.text
+        json_match = re.search(r'\{.*\}', text_response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            json.loads(json_str) # Validate
+            return json_str
+        else:
+             print(f"--- FAILED TO EXTRACT JSON ---")
+             print(f"AI Full Response: {text_response}")
+             return json.dumps({"summary": "I couldn't format my analysis correctly.", "chart_config": None})
+
     except Exception as e:
         print(f"Insight Generation Error: {e}")
         return json.dumps({
