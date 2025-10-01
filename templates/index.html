@@ -4,39 +4,65 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Data Agent Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="dashboard-container">
-        <!-- Left Panel for Chat -->
+    <div id="dashboard" class="dashboard-container">
         <div class="chat-panel">
             <header>
-                <h1>AI Data Agent</h1>
+                <h1>✨ AI Data Agent</h1>
+                <div class="data-source-container">
+                    <button class="data-source-btn" id="data-source-btn">
+                        📊 Connect Data <span id="dropdown-arrow">▼</span>
+                    </button>
+                    <div class="dropdown-content" id="dropdown-content">
+                        <div class="dropdown-section">
+                            <h4>🗄️ Databases</h4>
+                            <button class="dropdown-option" id="connect-sample-db">Sample SQLite Database</button>
+                        </div>
+                        <div class="dropdown-section">
+                            <h4>📁 Files</h4>
+                            <label class="dropdown-option" for="csv-upload">📄 Upload CSV File
+                                <input type="file" id="csv-upload" class="file-input" accept=".csv">
+                            </label>
+                            <label class="dropdown-option" for="excel-upload">📊 Upload Excel File
+                                <input type="file" id="excel-upload" class="file-input" accept=".xlsx,.xls">
+                            </label>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="connection-status" id="connection-status">Status: No data source connected</div>
+                        </div>
+                    </div>
+                </div>
             </header>
             <div id="chat-box" class="chat-box">
                 <div class="message bot-message">
-                    <p>👋 Hello! Ask me a question and I'll analyze the data for you.</p>
+                    <p><strong>👋 Welcome!</strong> Please connect to a data source to begin.</p>
                 </div>
             </div>
             <div class="input-area">
-                <input type="text" id="user-input" placeholder="Type your question...">
-                <button id="send-btn">➤</button>
+                <input type="text" id="user-input" placeholder="Connect to data to start..." disabled>
+                <button id="send-btn" disabled>➤</button>
             </div>
         </div>
-
-        <!-- Right Panel for Analysis -->
         <div class="analysis-panel">
             <header>
                 <h2>🔎 Analysis & Visualization</h2>
-                <button id="download-chart-btn" style="display: none;">Download Chart</button>
+                <button id="download-charts-btn" style="display: none;">📥 Download Charts</button>
             </header>
             <div id="insight-box" class="insight-box">
-                <p>Your analysis, tables, and charts will appear here.</p>
+                <div class="charts-grid">
+                    <div class="chart-card"><div class="chart-header"><div class="chart-title" id="chart1-title"></div><div class="chart-type-badge" id="chart1-badge"></div></div><div class="chart-container"><div class="chart-placeholder" id="chart1-placeholder">Connect data to see visualizations</div><canvas id="chart1" style="display: none;"></canvas></div></div>
+                    <div class="chart-card"><div class="chart-header"><div class="chart-title" id="chart2-title"></div><div class="chart-type-badge" id="chart2-badge"></div></div><div class="chart-container"><div class="chart-placeholder" id="chart2-placeholder"></div><canvas id="chart2" style="display: none;"></canvas></div></div>
+                    <div class="chart-card"><div class="chart-header"><div class="chart-title" id="chart3-title"></div><div class="chart-type-badge" id="chart3-badge"></div></div><div class="chart-container"><div class="chart-placeholder" id="chart3-placeholder"></div><canvas id="chart3" style="display: none;"></canvas></div></div>
+                    <div class="chart-card"><div class="chart-header"><div class="chart-title" id="chart4-title"></div><div class="chart-type-badge" id="chart4-badge"></div></div><div class="chart-container"><div class="chart-placeholder" id="chart4-placeholder"></div><canvas id="chart4" style="display: none;"></canvas></div></div>
+                </div>
+                <div id="results-section"></div>
             </div>
         </div>
     </div>
-  
     <script src="/static/script.js"></script>
 </body>
 </html>
