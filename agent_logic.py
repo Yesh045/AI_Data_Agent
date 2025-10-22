@@ -2,7 +2,8 @@ import os
 import re
 import json
 import pandas as pd
-from typing import Optional, Dict, Any, List
+import numpy as np
+from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import inspect, text
 from dotenv import load_dotenv
 
@@ -17,375 +18,420 @@ try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         AI_AVAILABLE = True
-        print("Google Gemini AI initialized successfully!")
+        print("✅ Gemini AI initialized")
     else:
-        print("No GOOGLE_API_KEY found. Using fallback logic.")
+        print("⚠️ No API key")
 except ImportError:
-    print("Google Generative AI not installed. Using fallback logic.")
+    print("⚠️ Google AI not installed")
 
 
 def get_db_schema(engine) -> str:
-    """Extract database schema with table and column information."""
+    """Extract full schema with sample data."""
     try:
         inspector = inspect(engine)
         tables = inspector.get_table_names()
-        schema_info = []
+        schema_parts = []
+        
         for table_name in tables:
             columns = inspector.get_columns(table_name)
-            column_details = [f"`{col['name']}` ({col['type']})" for col in columns]
-            schema_info.append(f"Table `{table_name}`: {', '.join(column_details)}")
-        return "\n".join(schema_info)
+            col_details = [f"`{col['name']}` ({col['type']})" for col in columns]
+            
+            # Get sample data for context
+            with engine.connect() as conn:
+                sample = pd.read_sql_query(text(f"SELECT * FROM {table_name} LIMIT 3"), conn)
+                row_count_result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                row_count = row_count_result.scalar()
+            
+            schema_parts.append(
+                f"Table `{table_name}` ({row_count} rows): {', '.join(col_details)}"
+            )
+        
+        return "\n".join(schema_parts)
     except Exception as e:
-        print(f"Schema extraction error: {e}")
-        return "Unable to extract schema"
+        return f"Error: {e}"
 
 
 def execute_query(engine, query: str) -> Optional[pd.DataFrame]:
-    """Execute SQL query on database engine."""
+    """Execute SQL query."""
     try:
         with engine.connect() as connection:
             return pd.read_sql_query(text(query), connection)
     except Exception as e:
-        print(f"Query execution error: {e}")
+        print(f"Query error: {e}")
         return None
 
 
-def generate_sql_with_intelligence(prompt: str, schema: str, source_type: str) -> str:
-    """Generate SQL with better understanding of aggregation needs."""
+def detect_user_intent(prompt: str) -> Dict[str, Any]:
+    """Understand what user wants."""
     prompt_lower = prompt.lower()
     
-    # Detect if we need grouping/aggregation
-    needs_grouping = any(word in prompt_lower for word in ['by', 'group', 'each', 'per', 'distribution', 'breakdown'])
-    needs_counting = any(word in prompt_lower for word in ['count', 'how many', 'number of', 'most', 'least'])
-    needs_sum = any(word in prompt_lower for word in ['total', 'sum', 'revenue', 'sales'])
+    intent = {
+        "action": "query",
+        "wants_visualization": False,
+        "visualization_type": None,
+        "needs_aggregation": False
+    }
     
-    # For file-based sources
+    # Explicit visualization requests
+    viz_keywords = {
+        'bar': ['bar chart', 'bar graph', 'bars'],
+        'line': ['line chart', 'line graph', 'trend', 'over time'],
+        'scatter': ['scatter plot', 'scatter', 'correlation', 'relationship'],
+        'pie': ['pie chart', 'pie', 'distribution', 'breakdown'],
+        'heatmap': ['heatmap', 'heat map', 'correlation matrix'],
+        'histogram': ['histogram', 'frequency']
+    }
+    
+    for viz_type, keywords in viz_keywords.items():
+        if any(kw in prompt_lower for kw in keywords):
+            intent['wants_visualization'] = True
+            intent['visualization_type'] = viz_type
+            break
+    
+    # General visualization words
+    if any(word in prompt_lower for word in ['visualize', 'plot', 'graph', 'chart', 'show me']):
+        intent['wants_visualization'] = True
+    
+    # Aggregation indicators
+    if any(word in prompt_lower for word in ['total', 'sum', 'average', 'count', 'group by', 'by', 'per']):
+        intent['needs_aggregation'] = True
+    
+    return intent
+
+
+def intelligent_sql_generation(prompt: str, schema: str, source_type: str) -> Optional[str]:
+    """Generate smart SQL that understands context."""
+    
+    if not AI_AVAILABLE:
+        return fallback_sql(prompt, schema, source_type)
+    
+    try:
+        system_prompt = f"""You are an expert SQL analyst. Your job is to understand the user's question and generate the PERFECT SQL query.
+
+**CRITICAL INTELLIGENCE RULES:**
+1. **Table Selection**: Analyze which table(s) the question is about. Don't always use the first table.
+2. **Column Selection**: Only SELECT columns that are relevant to the question.
+3. **Aggregation**: If question asks for totals, averages, counts - use GROUP BY with aggregation.
+4. **Joins**: If question involves multiple tables, use proper JOINs.
+5. **Filtering**: Add WHERE clauses if question mentions specific conditions.
+6. **Sorting**: Use ORDER BY if question asks for "top", "best", "highest", "lowest".
+7. **Limits**: Add LIMIT for large result sets unless user wants everything.
+
+**Schema:**
+{schema}
+
+**Source Type:** {'DataFrame (use table name df)' if source_type == 'file' else 'Database (use actual table names)'}
+
+**User Question:** "{prompt}"
+
+**Think step by step:**
+1. What table(s) does this question relate to?
+2. What columns are needed?
+3. Does this need GROUP BY? (for aggregations)
+4. Does this need JOIN? (for multiple tables)
+5. Does this need WHERE? (for filtering)
+6. Does this need ORDER BY? (for sorting)
+
+Generate ONLY the SQL query. No explanations, no markdown, just SQL.
+
+SQL Query:"""
+        
+        response = model.generate_content(system_prompt)
+        sql = response.text.strip()
+        sql = re.sub(r'```sql\s*|\s*```', '', sql).strip()
+        
+        if 'SELECT' in sql.upper():
+            print(f"🤖 AI Generated SQL: {sql}")
+            return sql
+        
+    except Exception as e:
+        print(f"AI SQL error: {e}")
+    
+    return fallback_sql(prompt, schema, source_type)
+
+
+def fallback_sql(prompt: str, schema: str, source_type: str) -> str:
+    """Smart fallback when AI isn't available."""
+    prompt_lower = prompt.lower()
+    
     if source_type == 'file':
-        # Example: "age and smoker" query
-        if 'age' in prompt_lower and 'smok' in prompt_lower:
-            return "SELECT `age`, `smoker`, COUNT(*) as count FROM df GROUP BY `age`, `smoker` ORDER BY `age`"
-        
-        # Generic grouping with count
-        elif needs_grouping and needs_counting:
-            # Try to find the grouping column from prompt
-            return "SELECT * FROM df"
-        
-        return "SELECT * FROM df LIMIT 50"
-    
-    # For database sources
+        table_name = 'df'
     else:
-        if "category" in prompt_lower:
-            return "SELECT category, COUNT(*) as count FROM products GROUP BY category"
-        elif "revenue" in prompt_lower or "sales by" in prompt_lower:
-            return "SELECT p.category, SUM(s.sale_price * s.quantity_sold) as revenue FROM sales s JOIN products p ON s.product_id = p.product_id GROUP BY p.category ORDER BY revenue DESC"
+        # Try to extract table name from schema
+        tables = re.findall(r'Table `(\w+)`', schema)
         
-        return "SELECT * FROM sales LIMIT 50"
+        # Try to match table name in question
+        table_name = None
+        for table in tables:
+            if table.lower() in prompt_lower:
+                table_name = table
+                break
+        
+        if not table_name:
+            table_name = tables[0] if tables else 'sales'
+    
+    # Build intelligent query
+    if 'count' in prompt_lower or 'how many' in prompt_lower:
+        return f"SELECT COUNT(*) as count FROM {table_name}"
+    elif any(word in prompt_lower for word in ['group', 'by', 'category', 'per']):
+        return f"SELECT * FROM {table_name} LIMIT 50"
+    elif 'total' in prompt_lower or 'sum' in prompt_lower:
+        return f"SELECT * FROM {table_name} LIMIT 50"
+    else:
+        return f"SELECT * FROM {table_name} LIMIT 100"
 
 
 def generate_sql(prompt: str, schema: str, history: list, source_type: str) -> Optional[str]:
-    """Generate SQL query using AI with better prompting."""
+    """Main SQL generation with intelligence."""
+    return intelligent_sql_generation(prompt, schema, source_type)
+
+
+def analyze_dataframe_intelligence(df: pd.DataFrame) -> Dict[str, Any]:
+    """Deep analysis of dataframe structure."""
     
-    if AI_AVAILABLE:
-        try:
-            if source_type == 'file':
-                context = f"""You are analyzing a DataFrame named `df`.
-
-**DataFrame Schema:**
-{schema}
-
-**CRITICAL INSTRUCTIONS:**
-1. Always use 'df' as the table name
-2. Wrap column names with spaces in backticks
-3. If the question asks about relationships, use GROUP BY with COUNT/SUM
-4. For "most", "least", "distribution" - use GROUP BY and ORDER BY
-5. For age-based or categorical analysis - GROUP BY those columns"""
-            else:
-                context = f"""You are querying a SQLite database.
-
-**Database Schema:**
-{schema}
-
-**CRITICAL INSTRUCTIONS:**
-1. Use proper table names from schema
-2. For aggregations, use GROUP BY with COUNT/SUM/AVG
-3. Use JOIN when relating multiple tables
-4. For "most", "least" - use ORDER BY with LIMIT"""
-
-            full_prompt = f"""{context}
-
-User Question: "{prompt}"
-
-Think step by step:
-1. What columns are relevant to this question?
-2. Does this need aggregation (GROUP BY, COUNT, SUM)?
-3. Does this need sorting (ORDER BY)?
-
-Generate a SQL query that will return data ready for visualization.
-Return ONLY the SQL query, no explanations.
-
-SQL Query:"""
-            
-            response = model.generate_content(full_prompt)
-            sql_text = response.text.strip()
-            
-            # Clean up response
-            sql_text = re.sub(r'```sql\s*', '', sql_text)
-            sql_text = re.sub(r'```\s*', '', sql_text)
-            sql_text = sql_text.strip()
-            
-            if sql_text and 'SELECT' in sql_text.upper():
-                print(f"AI Generated SQL: {sql_text}")
-                return sql_text
-            else:
-                return generate_sql_with_intelligence(prompt, schema, source_type)
-                
-        except Exception as e:
-            print(f"AI SQL generation error: {e}")
-            return generate_sql_with_intelligence(prompt, schema, source_type)
-    else:
-        return generate_sql_with_intelligence(prompt, schema, source_type)
-
-
-def preprocess_data_for_visualization(df: pd.DataFrame, prompt: str) -> pd.DataFrame:
-    """Intelligently aggregate and prepare data for visualization."""
+    if df.empty:
+        return {"error": "Empty dataframe"}
     
-    if df.empty or len(df) == 0:
-        return df
+    analysis = {
+        "row_count": len(df),
+        "col_count": len(df.columns),
+        "columns": {},
+        "recommended_visualizations": []
+    }
     
-    prompt_lower = prompt.lower()
-    
-    # If data is already aggregated (has count/sum columns), return as is
-    if 'count' in [col.lower() for col in df.columns]:
-        print("Data already aggregated")
-        return df
-    
-    # If we have too many rows, we need to aggregate
-    if len(df) > 50:
-        print(f"Data has {len(df)} rows, attempting intelligent aggregation...")
+    for col in df.columns:
+        col_info = {
+            "name": col,
+            "dtype": str(df[col].dtype),
+            "unique_count": df[col].nunique(),
+            "null_count": df[col].isnull().sum(),
+            "is_numeric": pd.api.types.is_numeric_dtype(df[col]),
+            "is_categorical": pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_categorical_dtype(df[col]),
+            "is_datetime": pd.api.types.is_datetime64_any_dtype(df[col]),
+            "is_id": 'id' in col.lower() or col.lower().endswith('_id'),
+            "sample_values": df[col].dropna().head(3).tolist() if not df[col].empty else []
+        }
         
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        categorical_cols = df.select_dtypes(include=['object', 'category', 'string']).columns.tolist()
-        
-        # Remove ID-like columns from categorical
-        categorical_cols = [col for col in categorical_cols if not col.lower().endswith('_id')]
-        
-        if categorical_cols:
-            # Group by first categorical column and aggregate
-            group_col = categorical_cols[0]
-            
-            if numeric_cols:
-                # Aggregate numeric columns
-                agg_dict = {col: 'sum' for col in numeric_cols}
-                df_agg = df.groupby(group_col).agg(agg_dict).reset_index()
-                print(f"Aggregated by {group_col}")
-                return df_agg
+        # Calculate visualization suitability score
+        score = 0
+        if col_info['is_id']:
+            score = -100  # Never visualize IDs
+        elif col_info['is_numeric'] and not col_info['is_id']:
+            if col_info['unique_count'] > 20:
+                score = 90  # Great for continuous viz
             else:
-                # Just count occurrences
-                df_agg = df.groupby(group_col).size().reset_index(name='count')
-                print(f"Counted by {group_col}")
-                return df_agg
+                score = 70  # Good for discrete viz
+        elif col_info['is_categorical']:
+            if 2 <= col_info['unique_count'] <= 20:
+                score = 95  # Perfect for categorical viz
+            elif col_info['unique_count'] > 50:
+                score = 20  # Too many categories
+            else:
+                score = 60
+        
+        col_info['viz_score'] = score
+        analysis['columns'][col] = col_info
     
-    return df
+    return analysis
 
 
-def create_chart_config(chart_type: str, title: str, labels_col: str, data_col: str) -> Dict[str, Any]:
-    """Create Chart.js configuration for different chart types."""
+def recommend_visualizations(df: pd.DataFrame, prompt: str, intent: Dict) -> List[Dict[str, Any]]:
+    """Intelligently recommend visualizations based on data structure."""
     
-    color_schemes = {
+    analysis = analyze_dataframe_intelligence(df)
+    
+    # Get high-value columns
+    sorted_cols = sorted(analysis['columns'].items(), key=lambda x: x[1]['viz_score'], reverse=True)
+    
+    numeric_cols = [col for col, info in sorted_cols if info['is_numeric'] and not info['is_id']]
+    categorical_cols = [col for col, info in sorted_cols if info['is_categorical'] and not info['is_id']]
+    
+    print(f"\n📊 Data Analysis:")
+    print(f"   Numeric columns: {numeric_cols[:3]}")
+    print(f"   Categorical columns: {categorical_cols[:3]}")
+    
+    recommendations = []
+    
+    # Rule 1: If user specified chart type, prioritize that
+    if intent.get('visualization_type'):
+        viz_type = intent['visualization_type']
+        if viz_type == 'scatter' and len(numeric_cols) >= 2:
+            recommendations.append({
+                "type": "scatter",
+                "x": numeric_cols[0],
+                "y": numeric_cols[1],
+                "reason": "User requested scatter plot"
+            })
+        elif viz_type == 'line' and categorical_cols and numeric_cols:
+            recommendations.append({
+                "type": "line",
+                "x": categorical_cols[0],
+                "y": numeric_cols[0],
+                "reason": "User requested line chart"
+            })
+        elif viz_type == 'pie' and categorical_cols:
+            recommendations.append({
+                "type": "pie",
+                "x": categorical_cols[0],
+                "y": "count",
+                "reason": "User requested pie chart"
+            })
+    
+    # Rule 2: Categorical + Numeric = Bar Chart (most common and useful)
+    if categorical_cols and numeric_cols:
+        # Don't repeat if already added
+        if not any(r['type'] == 'bar' and r['x'] == categorical_cols[0] for r in recommendations):
+            recommendations.append({
+                "type": "bar",
+                "x": categorical_cols[0],
+                "y": numeric_cols[0],
+                "reason": f"Comparing {numeric_cols[0]} across {categorical_cols[0]}"
+            })
+    
+    # Rule 3: Two numeric columns = Scatter Plot (shows correlation)
+    if len(numeric_cols) >= 2:
+        if not any(r['type'] == 'scatter' for r in recommendations):
+            recommendations.append({
+                "type": "scatter",
+                "x": numeric_cols[0],
+                "y": numeric_cols[1],
+                "reason": f"Relationship between {numeric_cols[0]} and {numeric_cols[1]}"
+            })
+    
+    # Rule 4: Single categorical = Pie/Doughnut (shows distribution)
+    if categorical_cols:
+        cat_col = categorical_cols[0]
+        unique_count = analysis['columns'][cat_col]['unique_count']
+        
+        if 2 <= unique_count <= 10:  # Good for pie charts
+            if not any(r['type'] == 'pie' and r['x'] == cat_col for r in recommendations):
+                recommendations.append({
+                    "type": "pie",
+                    "x": cat_col,
+                    "y": "count",
+                    "reason": f"Distribution of {cat_col}"
+                })
+    
+    # Rule 5: Multiple categoricals = Grouped bar chart
+    if len(categorical_cols) >= 2 and numeric_cols:
+        if not any(r['type'] == 'bar' and r['x'] == categorical_cols[1] for r in recommendations):
+            recommendations.append({
+                "type": "bar",
+                "x": categorical_cols[1],
+                "y": numeric_cols[0],
+                "reason": f"Alternative view: {numeric_cols[0]} by {categorical_cols[1]}"
+            })
+    
+    print(f"   Recommendations: {len(recommendations)} visualizations")
+    for i, rec in enumerate(recommendations, 1):
+        print(f"   {i}. {rec['type'].upper()}: {rec['reason']}")
+    
+    return recommendations[:4]  # Limit to 4 charts
+
+
+def create_chart_config(chart_type: str, title: str, x_col: str, y_col: str) -> Dict[str, Any]:
+    """Create Chart.js configuration."""
+    
+    colors = {
         'bar': ['#2ECC71', '#3498DB', '#E74C3C', '#9B59B6', '#F39C12', '#1ABC9C'],
+        'scatter': '#E74C3C',
         'line': '#3498DB',
-        'pie': ['#2ECC71', '#3498DB', '#E74C3C', '#9B59B6', '#F39C12', '#1ABC9C', '#E67E22'],
-        'doughnut': ['#9B59B6', '#3498DB', '#2ECC71', '#E74C3C', '#F39C12', '#1ABC9C'],
+        'pie': ['#2ECC71', '#3498DB', '#E74C3C', '#9B59B6', '#F39C12', '#1ABC9C', '#E67E22', '#16A085'],
     }
     
     config = {
         "type": chart_type,
         "data": {
-            "labels": [labels_col],
+            "labels": [x_col],
             "datasets": [{
                 "label": title,
-                "data": [data_col],
-                "backgroundColor": color_schemes.get(chart_type, color_schemes['bar']),
-                "borderColor": "#FFFFFF",
-                "borderWidth": 2
+                "data": [y_col],
+                "backgroundColor": colors.get(chart_type, colors['bar']),
+                "borderColor": "#FFFFFF" if chart_type in ['pie'] else colors.get(chart_type, '#3498DB'),
+                "borderWidth": 2 if chart_type in ['pie'] else 1
             }]
         },
         "options": {
             "responsive": True,
             "maintainAspectRatio": False,
             "plugins": {
-                "legend": {
-                    "display": True,
-                    "position": "top"
-                },
-                "title": {
-                    "display": True,
-                    "text": title,
-                    "font": {
-                        "size": 14,
-                        "weight": "bold"
-                    }
-                }
+                "legend": {"display": chart_type in ['pie', 'line']},
+                "title": {"display": True, "text": title, "font": {"size": 14, "weight": "bold"}}
             }
         }
     }
     
-    if chart_type in ['bar', 'line']:
+    if chart_type in ['bar', 'line', 'scatter']:
         config["options"]["scales"] = {
-            "y": {
-                "beginAtZero": True
-            }
+            "y": {"beginAtZero": True},
+            "x": {"display": True}
         }
+    
+    if chart_type == 'scatter':
+        config["data"]["datasets"][0]["showLine"] = False
+        config["data"]["datasets"][0]["pointRadius"] = 6
+        config["data"]["datasets"][0]["pointBackgroundColor"] = '#E74C3C'
     
     return config
 
 
-def generate_intelligent_charts(df: pd.DataFrame, prompt: str) -> List[Dict[str, Any]]:
-    """Generate smart charts based on data structure and question intent."""
-    
-    charts = []
-    
-    # First, preprocess the data
-    df = preprocess_data_for_visualization(df, prompt)
-    
-    if df.empty or len(df) == 0:
-        return []
-    
-    print(f"Generating charts for DataFrame with shape: {df.shape}")
-    print(f"Columns: {df.columns.tolist()}")
-    
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    categorical_cols = df.select_dtypes(include=['object', 'category', 'string']).columns.tolist()
-    
-    # Remove ID columns
-    categorical_cols = [col for col in categorical_cols if not col.lower().endswith('_id')]
-    
-    print(f"Numeric columns: {numeric_cols}")
-    print(f"Categorical columns: {categorical_cols}")
-    
-    # CHART 1: Primary Bar Chart (most important visualization)
-    if categorical_cols and numeric_cols:
-        # Use the most meaningful columns
-        x_col = categorical_cols[0]
-        y_col = numeric_cols[0]
-        
-        charts.append({
-            "title": f"{y_col} by {x_col}",
-            "config": create_chart_config('bar', f"{y_col} by {x_col}", x_col, y_col)
-        })
-        print(f"Chart 1: Bar chart - {y_col} by {x_col}")
-    
-    # CHART 2: Line Chart for Trends
-    if len(numeric_cols) >= 2:
-        charts.append({
-            "title": f"{numeric_cols[0]} Trend",
-            "config": create_chart_config('line', f"{numeric_cols[0]} Over Time", 
-                                         categorical_cols[0] if categorical_cols else numeric_cols[1], 
-                                         numeric_cols[0])
-        })
-        print(f"Chart 2: Line chart - {numeric_cols[0]}")
-    elif categorical_cols and numeric_cols:
-        # Alternative line chart
-        charts.append({
-            "title": f"{numeric_cols[0]} Progression",
-            "config": create_chart_config('line', f"{numeric_cols[0]} by {categorical_cols[0]}", 
-                                         categorical_cols[0], numeric_cols[0])
-        })
-        print(f"Chart 2: Line chart - {numeric_cols[0]} by {categorical_cols[0]}")
-    
-    # CHART 3: Pie Chart for Distribution
-    if categorical_cols and numeric_cols:
-        charts.append({
-            "title": f"{categorical_cols[0]} Distribution",
-            "config": create_chart_config('pie', f"{categorical_cols[0]} Breakdown", 
-                                         categorical_cols[0], numeric_cols[0])
-        })
-        print(f"Chart 3: Pie chart - {categorical_cols[0]}")
-    
-    # CHART 4: Doughnut Chart for Alternative View
-    if len(categorical_cols) > 1 and numeric_cols:
-        charts.append({
-            "title": f"{categorical_cols[1]} Overview",
-            "config": create_chart_config('doughnut', f"{categorical_cols[1]} Distribution", 
-                                         categorical_cols[1], numeric_cols[0])
-        })
-        print(f"Chart 4: Doughnut chart - {categorical_cols[1]}")
-    elif len(numeric_cols) > 1 and categorical_cols:
-        charts.append({
-            "title": f"{numeric_cols[1]} Distribution",
-            "config": create_chart_config('doughnut', f"{numeric_cols[1]} by {categorical_cols[0]}", 
-                                         categorical_cols[0], numeric_cols[1])
-        })
-        print(f"Chart 4: Doughnut chart - {numeric_cols[1]} by {categorical_cols[0]}")
-    
-    print(f"Generated {len(charts)} charts")
-    return charts[:4]  # Return maximum 4 charts
-
-
-def analyze_data_for_insights(prompt: str, df: pd.DataFrame) -> str:
-    """Analyze dataframe and generate insights with intelligent chart configurations."""
+def generate_natural_response(prompt: str, df: pd.DataFrame, intent: Dict) -> str:
+    """Generate conversational response."""
     
     if df.empty:
-        return json.dumps({"summary": "No data available for analysis.", "charts": []})
+        return "I didn't find any data matching that query."
     
-    try:
-        # Generate summary
-        row_count = len(df)
-        col_count = len(df.columns)
-        
-        print(f"\nAnalyzing data: {row_count} rows, {col_count} columns")
-        
-        # Get AI summary if available
-        if AI_AVAILABLE:
-            try:
-                df_sample = df.head(5).to_string()
-                summary_prompt = f"""Analyze this data and provide ONE concise sentence summarizing the key insight:
-
-Data preview:
-{df_sample}
-
-Total rows: {row_count}
-
-One sentence summary:"""
-                
-                response = model.generate_content(summary_prompt)
-                summary = response.text.strip()
-                # Remove quotes if present
-                summary = summary.strip('"').strip("'")
-            except Exception as e:
-                print(f"AI summary error: {e}")
-                summary = f"Analysis shows {row_count} data points across {col_count} dimensions."
-        else:
-            summary = f"Analysis shows {row_count} data points across {col_count} dimensions."
-        
-        # Generate intelligent charts
-        charts = generate_intelligent_charts(df, prompt)
-        
-        return json.dumps({
-            "summary": summary,
-            "charts": charts
-        })
-        
-    except Exception as e:
-        print(f"Data analysis error: {e}")
-        import traceback
-        traceback.print_exc()
-        return json.dumps({
-            "summary": f"Analysis completed with {len(df)} records.",
-            "charts": []
-        })
-
-
-if __name__ == '__main__':
-    print("Testing agent_logic...")
+    row_count = len(df)
     
-    # Test with sample data
-    test_df = pd.DataFrame({
-        'age': [25, 30, 35, 25, 30, 35, 40, 45],
-        'smoker': ['yes', 'no', 'yes', 'yes', 'no', 'no', 'yes', 'no'],
-        'count': [10, 15, 8, 12, 20, 18, 5, 22]
-    })
+    if AI_AVAILABLE and row_count <= 100:
+        try:
+            sample = df.head(5).to_string()
+            response_prompt = f"""User asked: "{prompt}"
+
+Result: {row_count} rows
+
+Sample:
+{sample}
+
+Provide a brief, natural answer (1-2 sentences) about what this data shows.
+Be conversational and don't use robotic phrases like "the data shows"."""
+            
+            response = model.generate_content(response_prompt)
+            return response.text.strip()
+        except:
+            pass
     
-    result = analyze_data_for_insights("show age and smoker distribution", test_df)
-    print("\nTest Analysis Result:")
-    print(json.dumps(json.loads(result), indent=2))
+    # Fallback
+    cols = ', '.join(df.columns.tolist()[:3])
+    return f"Found {row_count} records with columns: {cols}{'...' if len(df.columns) > 3 else ''}."
+
+
+def analyze_data(prompt: str, df: pd.DataFrame) -> Dict[str, Any]:
+    """Main intelligence function."""
+    
+    intent = detect_user_intent(prompt)
+    
+    print(f"\n🎯 Intent: {intent}")
+    
+    # Generate natural response
+    summary = generate_natural_response(prompt, df, intent)
+    
+    # Decide on visualizations
+    charts = []
+    if intent['wants_visualization'] or len(df) <= 50:
+        print("🎨 Generating visualizations...")
+        recommendations = recommend_visualizations(df, prompt, intent)
+        
+        for rec in recommendations:
+            title = f"{rec['y']} by {rec['x']}" if rec['y'] != 'count' else f"{rec['x']} Distribution"
+            charts.append({
+                "title": title,
+                "config": create_chart_config(rec['type'], title, rec['x'], rec['y']),
+                "recommendation": rec
+            })
+    
+    return {
+        "summary": summary,
+        "charts": charts,
+        "intent": intent
+    }
