@@ -1,276 +1,375 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const dataSourceBtn = document.getElementById('data-source-btn');
-    const dropdownContent = document.getElementById('dropdown-content');
-    const connectionStatus = document.getElementById('connection-status');
-    const connectSampleDbBtn = document.getElementById('connect-sample-db');
-    const csvUploadInput = document.getElementById('csv-upload');
-    const excelUploadInput = document.getElementById('excel-upload');
-    
-    const userInput = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send-btn');
-    const chatBox = document.getElementById('chat-box');
-    const resultsSection = document.getElementById('results-section');
-    const downloadBtn = document.getElementById('download-charts-btn');
-    
+// AI Analyst Dashboard - Frontend JavaScript
+
     let chartInstances = {};
 
-    // Dropdown toggle
-    dataSourceBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        dropdownContent.classList.toggle('show');
-    });
-
-    document.addEventListener('click', (e) => {
-        if (!e.target.closest('.data-source-container')) {
-            dropdownContent.classList.remove('show');
-        }
-    });
-
-    // Connection logic
-    const connectDataSource = async (sourceType, file = null) => {
-        updateConnectionStatus('Connecting...', 'connecting');
-        let body = { source_type: sourceType };
-
-        if (file) {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = async () => {
-                body.file_data = reader.result.split(',')[1];
-                body.file_name = file.name;
-                await sendConnectionRequest(body);
-            };
-            reader.onerror = () => updateConnectionStatus('Failed to read file.', 'error');
-        } else {
-            await sendConnectionRequest(body);
-        }
-    };
-
-    const sendConnectionRequest = async (body) => {
-        try {
-            const response = await fetch('/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await response.json();
-
-            if (data.status === 'success') {
-                updateConnectionStatus(data.message, 'success');
-                unlockApp(data.schema);
-                dropdownContent.classList.remove('show');
-            } else {
-                updateConnectionStatus(data.message, 'error');
-            }
-        } catch (error) {
-            updateConnectionStatus('Connection failed.', 'error');
-        }
-    };
-
-    const unlockApp = (schema) => {
-        userInput.disabled = false;
-        sendBtn.disabled = false;
-        userInput.placeholder = 'Ask anything about your data...';
-        appendChatMessage(`<p><strong>✅ Connected!</strong></p><p>Ask me anything about your data.</p>`, 'bot-message');
-    };
-
-    const updateConnectionStatus = (message, statusClass) => {
-        connectionStatus.textContent = `Status: ${message}`;
-        connectionStatus.className = 'connection-status';
-        if (statusClass) connectionStatus.classList.add(statusClass);
-    };
-    
-    connectSampleDbBtn.addEventListener('click', () => connectDataSource('sample_db'));
-    csvUploadInput.addEventListener('change', (e) => connectDataSource('file', e.target.files[0]));
-    excelUploadInput.addEventListener('change', (e) => connectDataSource('file', e.target.files[0]));
-    
-    // Chat logic
-    const sendMessage = async () => {
-        const prompt = userInput.value.trim();
-        if (!prompt) return;
-
-        appendChatMessage(prompt, 'user-message');
-        userInput.value = '';
-        appendChatMessage('<p>🤔 Analyzing...</p>', 'bot-message', true);
-
-        try {
-            const response = await fetch('/ask', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt }),
-            });
-            
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            updateUI(data);
-        } catch (error) {
-            console.error('Error:', error);
-            updateChat({ analysis: { summary: 'Sorry, an error occurred.' } });
-        }
-    };
-    
-    const updateUI = (data) => {
-        updateChat(data);
-        updateResults(data);
-    };
-
-    const updateChat = (data) => {
-        const loadingMessage = chatBox.querySelector('.loading');
-        const chatHtml = data.analysis?.summary || "Done.";
-        
-        if (loadingMessage) {
-            loadingMessage.innerHTML = `<p>${chatHtml}</p>`;
-            loadingMessage.classList.remove('loading');
-        } else {
-            appendChatMessage(`<p>${chatHtml}</p>`, 'bot-message');
-        }
-    };
-
-    const updateResults = (data) => {
-        resultsSection.innerHTML = '';
-        Object.values(chartInstances).forEach(chart => chart.destroy());
-        chartInstances = {};
-        
-        // Reset charts
-        for (let i = 1; i <= 4; i++) {
-            document.getElementById(`chart${i}`).style.display = 'none';
-            document.getElementById(`chart${i}-placeholder`).style.display = 'flex';
-            document.getElementById(`chart${i}-placeholder`).textContent = '';
-            document.getElementById(`chart${i}-title`).textContent = '';
-            document.getElementById(`chart${i}-badge`).textContent = '';
-        }
-        downloadBtn.style.display = 'none';
-
-        // Show SQL
-        if (data.sql_query) {
-            const details = document.createElement('details');
-            details.innerHTML = `<summary>📝 SQL Query</summary><pre>${data.sql_query}</pre>`;
-            details.style.cssText = 'background:#f8f9fa;padding:15px;border-radius:8px;margin-bottom:20px;';
-            resultsSection.appendChild(details);
-        }
-        
-        // Show table
-        if (data.results && data.results.length > 0) {
-            resultsSection.innerHTML += createTable(data.results);
-        }
-
-        // Render charts
-        if (data.analysis?.charts && data.analysis.charts.length > 0) {
-            console.log(`📊 Rendering ${data.analysis.charts.length} charts`);
-            data.analysis.charts.forEach((chartData, index) => {
-                if (index < 4) {
-                    renderSmartChart(index + 1, chartData, data.results);
-                }
-            });
-            downloadBtn.style.display = 'block';
-        }
-    };
-
-    // INTELLIGENT CHART RENDERING
-    const renderSmartChart = (chartNum, chartData, rawData) => {
-        const canvas = document.getElementById(`chart${chartNum}`);
-        const placeholder = document.getElementById(`chart${chartNum}-placeholder`);
-        const titleEl = document.getElementById(`chart${chartNum}-title`);
-        const badgeEl = document.getElementById(`chart${chartNum}-badge`);
-        
-        try {
-            const config = chartData.config;
-            const xCol = config.data.labels[0];
-            const yCol = config.data.datasets[0].data[0];
-            const chartType = config.type;
-            
-            console.log(`Chart ${chartNum}: ${chartType.toUpperCase()} - ${xCol} vs ${yCol}`);
-            
-            // Smart data preparation
-            let chartLabels, chartValues;
-            
-            if (yCol === 'count') {
-                // Count occurrences
-                const counts = {};
-                rawData.forEach(row => {
-                    const key = String(row[xCol] || 'Unknown');
-                    counts[key] = (counts[key] || 0) + 1;
-                });
-                chartLabels = Object.keys(counts);
-                chartValues = Object.values(counts);
-            } else {
-                // Aggregate by grouping
-                const grouped = {};
-                rawData.forEach(row => {
-                    const key = String(row[xCol] || 'Unknown');
-                    const val = parseFloat(row[yCol]) || 0;
-                    grouped[key] = (grouped[key] || 0) + val;
-                });
-                chartLabels = Object.keys(grouped);
-                chartValues = Object.values(grouped);
-            }
-            
-            // Limit data points for readability
-            if (chartLabels.length > 20 && chartType !== 'line') {
-                const sorted = chartLabels.map((label, i) => ({label, value: chartValues[i]}))
-                    .sort((a, b) => b.value - a.value)
-                    .slice(0, 15);
-                chartLabels = sorted.map(d => d.label);
-                chartValues = sorted.map(d => d.value);
-            }
-            
-            config.data.labels = chartLabels;
-            config.data.datasets[0].data = chartValues;
-            
-            if (!config.options) config.options = {};
-            config.options.responsive = true;
-            config.options.maintainAspectRatio = false;
-            
-            // Show chart
-            placeholder.style.display = 'none';
-            canvas.style.display = 'block';
-            titleEl.textContent = chartData.title;
-            badgeEl.textContent = chartType.toUpperCase();
-            
-            chartInstances[chartNum] = new Chart(canvas.getContext('2d'), config);
-            console.log(`✅ Chart ${chartNum} rendered`);
-            
-        } catch (error) {
-            console.error(`Chart ${chartNum} error:`, error);
-            placeholder.textContent = `Error: ${error.message}`;
-            placeholder.style.display = 'flex';
-        }
-    };
-    
-    const createTable = (data) => {
-        const headers = Object.keys(data[0]);
-        let table = '<div class="table-wrapper"><table class="results-table"><thead><tr>';
-        headers.forEach(h => table += `<th>${h}</th>`);
-        table += '</tr></thead><tbody>';
-        data.slice(0, 50).forEach(row => {
-            table += '<tr>';
-            headers.forEach(h => table += `<td>${row[h] ?? 'N/A'}</td>`);
-            table += '</tr>';
-        });
-        table += '</tbody></table></div>';
-        if (data.length > 50) table += `<p class="truncation-notice">Showing 50 of ${data.length} rows</p>`;
-        return table;
-    };
-
-    const appendChatMessage = (content, className, isLoading = false) => {
-        const div = document.createElement('div');
-        div.className = `message ${className}`;
-        if (isLoading) div.classList.add('loading');
-        div.innerHTML = content;
-        chatBox.appendChild(div);
-        chatBox.scrollTop = chatBox.scrollHeight;
-    };
-    
-    downloadBtn.addEventListener('click', () => {
-        Object.values(chartInstances).forEach((chart, i) => {
-            const link = document.createElement('a');
-            link.href = chart.toBase64Image();
-            link.download = `chart_${i+1}.png`;
-            link.click();
-        });
-    });
-    
-    sendBtn.addEventListener('click', sendMessage);
-    userInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage();
-    });
+// Initialize the dashboard when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    initializeDashboard();
+    setupEventListeners();
 });
+
+function setupEventListeners() {
+    const chatInput = document.getElementById('chatInput');
+    const sendButton = document.getElementById('sendButton');
+    
+    // Send message on Enter key
+    chatInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    // Auto-resize textarea
+    chatInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+}
+
+async function initializeDashboard() {
+    try {
+        const response = await fetch('/init_dashboard');
+        const data = await response.json();
+        
+        if (data.success) {
+            renderDashboard(data.charts);
+                    } else {
+            showError('Failed to load dashboard: ' + data.error);
+                }
+            } catch (error) {
+        console.error('Dashboard initialization error:', error);
+        showError('Failed to connect to server');
+    }
+}
+
+function renderDashboard(charts) {
+    const loadingState = document.getElementById('loadingState');
+    const chartsGrid = document.getElementById('chartsGrid');
+    
+    loadingState.style.display = 'none';
+    chartsGrid.style.display = 'grid';
+    
+    chartsGrid.innerHTML = '';
+    
+    charts.forEach((chart, index) => {
+        const chartElement = createChartElement(chart, index);
+        chartsGrid.appendChild(chartElement);
+    });
+}
+
+function createChartElement(chartData, index) {
+    const container = document.createElement('div');
+    
+    if (chartData.type === 'metric') {
+        container.className = 'metric-card';
+        container.innerHTML = `
+            <div class="metric-icon">${chartData.icon}</div>
+            <div class="metric-value">${chartData.value}</div>
+            <div class="metric-title">${chartData.title}</div>
+        `;
+    } else {
+        container.className = 'chart-card';
+        container.innerHTML = `
+            <div class="chart-header">
+                <div class="chart-icon">📊</div>
+                <div class="chart-title">${chartData.title}</div>
+                    </div>
+            <div class="chart-content">
+                <canvas id="chart-${index}"></canvas>
+                </div>
+            `;
+        
+        // Create chart after DOM element is added
+        setTimeout(() => {
+            createChart(`chart-${index}`, chartData);
+        }, 100);
+    }
+    
+    return container;
+}
+
+function createChart(canvasId, chartData) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    
+    let config;
+    
+    if (chartData.type === 'scatter') {
+        // Scatter plot configuration
+        config = {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Data Points',
+                    data: chartData.labels.map((x, i) => ({
+                        x: x,
+                        y: chartData.data[i]
+                    })),
+                    backgroundColor: chartData.colors[0] || '#3b82f6',
+                    borderColor: chartData.colors[0] || '#3b82f6',
+                    borderWidth: 2,
+                    pointRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'bottom'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        title: {
+                            display: true,
+                            text: 'X Axis'
+                        },
+                        grid: {
+                            color: '#e2e8f0'
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Y Axis'
+                        },
+                        grid: {
+                            color: '#e2e8f0'
+                        }
+                    }
+                }
+            }
+        };
+    } else {
+        // Regular chart configuration
+        config = {
+            type: chartData.type,
+                            data: {
+                labels: chartData.labels || [],
+                datasets: [{
+                    data: chartData.data || [],
+                    backgroundColor: chartData.colors || ['#3b82f6'],
+                    borderColor: chartData.colors || ['#3b82f6'],
+                    borderWidth: 2,
+                    fill: chartData.type === 'line' ? false : true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: chartData.type === 'pie',
+                        position: 'bottom'
+                    }
+                },
+                scales: chartData.type !== 'pie' ? {
+                    y: {
+                        beginAtZero: true,
+                        grid: {
+                            color: '#e2e8f0'
+                        }
+                    },
+                    x: {
+                        grid: {
+                            color: '#e2e8f0'
+                        }
+                    }
+                } : {}
+            }
+        };
+    }
+    
+    // Destroy existing chart if it exists
+    if (chartInstances[canvasId]) {
+        chartInstances[canvasId].destroy();
+    }
+    
+    chartInstances[canvasId] = new Chart(ctx, config);
+    }
+
+    async function sendMessage() {
+    const chatInput = document.getElementById('chatInput');
+        const message = chatInput.value.trim();
+    
+        if (!message) return;
+    
+    // Add user message to chat
+    addMessageToChat(message, 'user');
+        chatInput.value = '';
+    chatInput.style.height = 'auto';
+    
+    // Show typing indicator
+    const typingId = showTypingIndicator();
+
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ question: message })
+        });
+        
+        const data = await response.json();
+        hideTypingIndicator(typingId);
+        
+        if (data.success) {
+            // Always show data table if available (this is the main response)
+            if (data.data && data.data.length > 0) {
+                addDataTable(data.data, data.summary || data.explanation);
+            } else {
+                // If no data, show the explanation
+                addMessageToChat(data.explanation, 'ai');
+            }
+            
+            // Add chart if requested - this will append to existing dashboard
+            if (data.chart_data) {
+                addChartToDashboard(data.chart_data);
+                }
+            } else {
+            addMessageToChat('Sorry, I encountered an error: ' + data.error, 'ai');
+            }
+        } catch (error) {
+        hideTypingIndicator(typingId);
+            console.error('Chat error:', error);
+        addMessageToChat('Sorry, I encountered a connection error. Please try again.', 'ai');
+    }
+}
+
+function addMessageToChat(message, type) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message';
+    
+    const messageContent = document.createElement('div');
+    messageContent.className = `message-${type}`;
+    messageContent.textContent = message;
+    
+    messageDiv.appendChild(messageContent);
+    chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+function addDataTable(data, summary) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message';
+    
+    const messageContent = document.createElement('div');
+    messageContent.className = 'message-ai';
+    
+    // Add summary if provided
+    if (summary) {
+        const summaryDiv = document.createElement('div');
+        summaryDiv.style.marginBottom = '0.5rem';
+        summaryDiv.style.fontWeight = '500';
+        summaryDiv.textContent = summary;
+        messageContent.appendChild(summaryDiv);
+    }
+    
+    const tableContainer = document.createElement('div');
+    tableContainer.className = 'message-data';
+    
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    
+    // Create header
+    const headerRow = document.createElement('tr');
+    Object.keys(data[0]).forEach(key => {
+        const th = document.createElement('th');
+        th.textContent = key;
+        headerRow.appendChild(th);
+    });
+    table.appendChild(headerRow);
+    
+    // Create data rows (limit to 10 rows for display)
+    data.slice(0, 10).forEach(row => {
+        const tr = document.createElement('tr');
+        Object.values(row).forEach(value => {
+            const td = document.createElement('td');
+            td.textContent = value;
+            tr.appendChild(td);
+        });
+        table.appendChild(tr);
+    });
+    
+    tableContainer.appendChild(table);
+    messageContent.appendChild(tableContainer);
+    
+    if (data.length > 10) {
+        const moreText = document.createElement('div');
+        moreText.style.padding = '0.5rem';
+        moreText.style.fontSize = '0.75rem';
+        moreText.style.color = '#64748b';
+        moreText.textContent = `... and ${data.length - 10} more rows`;
+        messageContent.appendChild(moreText);
+    }
+    
+    messageDiv.appendChild(messageContent);
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function addChartToDashboard(chartData) {
+    const chartsGrid = document.getElementById('chartsGrid');
+    const chartElement = createChartElement(chartData, Date.now());
+    chartsGrid.appendChild(chartElement);
+}
+
+function showTypingIndicator() {
+    const chatMessages = document.getElementById('chatMessages');
+    const typingId = 'typing-' + Date.now();
+    
+    const typingDiv = document.createElement('div');
+    typingDiv.id = typingId;
+    typingDiv.className = 'typing-indicator';
+    typingDiv.innerHTML = `
+        <div class="typing-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+        <span>AI is thinking...</span>
+    `;
+    
+    chatMessages.appendChild(typingDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    return typingId;
+}
+
+function hideTypingIndicator(typingId) {
+    const typingElement = document.getElementById(typingId);
+    if (typingElement) {
+        typingElement.remove();
+    }
+}
+
+function sendQuickMessage(message) {
+    const chatInput = document.getElementById('chatInput');
+    chatInput.value = message;
+    sendMessage();
+}
+
+function showError(message) {
+    const chatMessages = document.getElementById('chatMessages');
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'message';
+    
+    const errorContent = document.createElement('div');
+    errorContent.className = 'message-ai';
+    errorContent.style.background = '#fef2f2';
+    errorContent.style.color = '#dc2626';
+    errorContent.style.border = '1px solid #fecaca';
+    errorContent.textContent = message;
+    
+    errorDiv.appendChild(errorContent);
+    chatMessages.appendChild(errorDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
