@@ -222,12 +222,19 @@ function createChart(canvasId, chartData) {
         if (data.success) {
             // Always show data table if available (this is the main response)
             if (data.data && data.data.length > 0) {
-                addDataTable(data.data, data.summary || data.explanation);
+                // Check if data is array of strings (table names) or objects (table data)
+                if (typeof data.data[0] === 'string') {
+                    // Handle table names list
+                    addTableNamesList(data.data, data.summary || data.explanation);
+                } else {
+                    // Handle regular table data
+                    addDataTable(data.data, data.summary || data.explanation);
+                }
             } else {
                 // If no data, show the explanation
                 addMessageToChat(data.explanation, 'ai');
             }
-            
+
             // Add chart if requested - this will append to existing dashboard
             if (data.chart_data) {
                 addChartToDashboard(data.chart_data);
@@ -357,18 +364,65 @@ function sendQuickMessage(message) {
     sendMessage();
 }
 
+function addTableNamesList(tableNames, summary) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message';
+
+    const messageContent = document.createElement('div');
+    messageContent.className = 'message-ai';
+
+    // Add summary if provided
+    if (summary) {
+        const summaryDiv = document.createElement('div');
+        summaryDiv.style.marginBottom = '0.5rem';
+        summaryDiv.style.fontWeight = '500';
+        summaryDiv.textContent = summary;
+        messageContent.appendChild(summaryDiv);
+    }
+
+    const tableContainer = document.createElement('div');
+    tableContainer.className = 'message-data';
+
+    const table = document.createElement('table');
+    table.className = 'data-table';
+
+    // Create header
+    const headerRow = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = 'Available Tables';
+    headerRow.appendChild(th);
+    table.appendChild(headerRow);
+
+    // Create data rows
+    tableNames.forEach(tableName => {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.textContent = tableName;
+        tr.appendChild(td);
+        table.appendChild(tr);
+    });
+
+    tableContainer.appendChild(table);
+    messageContent.appendChild(tableContainer);
+
+    messageDiv.appendChild(messageContent);
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
 function showError(message) {
     const chatMessages = document.getElementById('chatMessages');
     const errorDiv = document.createElement('div');
     errorDiv.className = 'message';
-    
+
     const errorContent = document.createElement('div');
     errorContent.className = 'message-ai';
     errorContent.style.background = '#fef2f2';
     errorContent.style.color = '#dc2626';
     errorContent.style.border = '1px solid #fecaca';
     errorContent.textContent = message;
-    
+
     errorDiv.appendChild(errorContent);
     chatMessages.appendChild(errorDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
